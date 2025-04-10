@@ -1,10 +1,10 @@
 import pandas as pd
-import yfinance as yf
+from nsepy import get_history
+from datetime import date, timedelta
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import telegram
 import pytz
-from datetime import datetime, timedelta
 import os
 import logging
 import requests
@@ -80,45 +80,43 @@ def load_nse500_stocks():
     try:
         df = pd.read_csv('nse500_stocks.csv')
         logger.info(f"Loaded {len(df)} stocks from CSV file")
-        return [f"{stock}.NS" for stock in df['Symbol'].tolist()]
+        return [stock for stock in df['Symbol'].tolist()]  # Remove .NS
     except Exception as e:
         logger.error(f"Error loading NSE500 stocks: {str(e)}")
         logger.info("Using fallback stock list")
-        return ['RELIANCE.NS', 'TCS.NS', 'INFY.NS', 'HDFCBANK.NS', 'ICICIBANK.NS']
+        return ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK']
 
 def calculate_sma(data, length):
     """Calculate Simple Moving Average."""
-    return data.rolling(window=length).mean()
+    return data['Close'].rolling(window=length).mean()
 
 def check_ma_crossover(stock_symbol, timeframe='1d'):
     """Check for MA crossover."""
     try:
+        today = date.today()
         if timeframe == '1d':
-            interval = '1d'
             lookback_days = 100
         elif timeframe == '1wk':
-            interval = '1wk'
-            lookback_days = 200
+            lookback_days = 200 * 7
         elif timeframe == '1mo':
-            interval = '1mo'
-            lookback_days = 365
+            lookback_days = 365 * 2
         else:
             raise ValueError(f"Unsupported timeframe: {timeframe}")
 
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=lookback_days + 100)  # Extra days for MA calculation
+        start_date = today - timedelta(days=lookback_days)
+        end_date = today
 
-        data = yf.download(stock_symbol, start=start_date, end=end_date, interval=interval, progress=False)
+        data = get_history(symbol=stock_symbol, start=start_date, end=end_date)
 
         if data.empty:
             logger.warning(f"No data retrieved for {stock_symbol} on {timeframe}")
-            return None, None
+            return None, None, None
 
-        sma_50 = calculate_sma(data['Close'], 50)
+        sma_50 = calculate_sma(data, 50)
 
         if len(data) < 51:
             logger.warning(f"Not enough data for MA calculation: {stock_symbol} on {timeframe}")
-            return None, None
+            return None, None, None
 
         current_close = data['Close'].iloc[-1]
         previous_close = data['Close'].iloc[-2]
@@ -128,11 +126,11 @@ def check_ma_crossover(stock_symbol, timeframe='1d'):
         buy_signal = previous_close < previous_sma and current_close > current_sma
         sell_signal = previous_close > previous_sma and current_close < current_sma
 
-        return buy_signal, sell_signal
+        return buy_signal, sell_signal, data
 
     except Exception as e:
         logger.error(f"Error checking MA crossover for {stock_symbol} on {timeframe}: {str(e)}")
-        return None, None
+        return None, None, None
 
 def generate_chart(stock_symbol, data, sma_50, timeframe='1d'):
     """Generate chart with stock price and SMA."""
@@ -141,9 +139,8 @@ def generate_chart(stock_symbol, data, sma_50, timeframe='1d'):
         plt.plot(data.index, data['Close'], label='Close Price')
         plt.plot(sma_50.index, sma_50, label='50 SMA', color='red')
 
-        stock_name = stock_symbol.replace('.NS', '')
         timeframe_label = "Daily" if timeframe == '1d' else "Weekly" if timeframe == '1wk' else "Monthly"
-        plt.title(f'{stock_name} {timeframe_label} Chart with 50 SMA')
+        plt.title(f'{stock_symbol} {timeframe_label} Chart with 50 SMA')
         plt.xlabel('Date')
         plt.ylabel('Price')
         plt.legend()
@@ -177,25 +174,21 @@ def check_crossovers():
         if alerts_sent >= 30:
             break
         for timeframe in timeframes:
-            buy_signal, sell_signal = check_ma_crossover(stock, timeframe)
+            buy_signal, sell_signal, data = check_ma_crossover(stock, timeframe)
             if buy_signal is None:
                 continue
             if buy_signal or sell_signal:
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=365)
-                data = yf.download(stock, start=start_date, end = end_date, interval = timeframe, progress = False)
-                sma_50 = calculate_sma(data['Close'], 50)
+                sma_50 = calculate_sma(data, 50)
                 chart_path = generate_chart(stock, data, sma_50, timeframe)
 
                 if chart_path:
-                    stock_name = stock.replace('.NS', '')
                     timeframe_label = "Daily" if timeframe == '1d' else "Weekly" if timeframe == '1wk' else "Monthly"
                     if buy_signal:
-                        message = f"{BUY_EMOJI} *{timeframe_label} BUY*: {stock_name}\n\n"
+                        message = f"{BUY_EMOJI} *{timeframe_label} BUY*: {stock}\n\n"
                         message += f"📅 Date: {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')}\n"
                         message += "📈 50 SMA Crossover (Above)"
                     else:
-                        message = f"{SELL_EMOJI} *{timeframe_label} SELL*: {stock_name}\n\n"
+                        message = f"{SELL_EMOJI} *{timeframe_label} SELL*: {stock}\n\n"
                         message += f"📅 Date: {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')}\n"
                         message += "📉 50 SMA Crossover (Below)"
 
