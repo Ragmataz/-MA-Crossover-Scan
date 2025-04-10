@@ -17,20 +17,76 @@ logger = logging.getLogger(__name__)
 # Telegram setup
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-ALPHA_VANTAGE_API_KEY = os.environ.get('ALPHA_VANTAGE_API_KEY') #add this line
+ALPHA_VANTAGE_API_KEY = os.environ.get('ALPHA_VANTAGE_API_KEY')
 
 # Create directory for charts
 if not os.path.exists('charts'):
     os.makedirs('charts')
 
 def test_telegram_connection():
-    # ... (same as before)
+    """Test the Telegram connection."""
+    try:
+        url = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage'
+        payload = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': "🔔 *TEST MESSAGE*\nMA Crossover system is online",
+            'parse_mode': 'Markdown'
+        }
+        response = requests.post(url, data=payload)
+        result = response.json()
+        if result.get('ok'):
+            logger.info("Test message sent successfully")
+            return True
+        else:
+            logger.error(f"Test message failed: {result.get('description', 'Unknown error')}")
+            return False
+    except Exception as e:
+        logger.error(f"Telegram test failed: {str(e)}")
+        return False
 
 def send_telegram_message(message, photo_path=None):
-    # ... (same as before)
+    """Send a message or photo to Telegram."""
+    try:
+        if photo_path:
+            url = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto'
+            with open(photo_path, 'rb') as photo:
+                files = {'photo': photo}
+                payload = {
+                    'chat_id': TELEGRAM_CHAT_ID,
+                    'caption': message,
+                    'parse_mode': 'Markdown'
+                }
+                response = requests.post(url, data=payload, files=files)
+        else:
+            url = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage'
+            payload = {
+                'chat_id': TELEGRAM_CHAT_ID,
+                'text': message,
+                'parse_mode': 'Markdown'
+            }
+            response = requests.post(url, data=payload)
+
+        result = response.json()
+        if result.get('ok'):
+            logger.info("Message sent successfully")
+            return True
+        else:
+            logger.error(f"Failed to send message: {result.get('description', 'Unknown error')}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to send Telegram message: {str(e)}")
+        return False
 
 def load_nse500_stocks():
-    # ... (same as before)
+    """Load NSE500 stocks from CSV file."""
+    try:
+        df = pd.read_csv('nse500_stocks.csv')
+        logger.info(f"Loaded {len(df)} stocks from CSV file")
+        return [stock for stock in df['Symbol'].tolist()]  # Remove .NS
+    except Exception as e:
+        logger.error(f"Error loading NSE500 stocks: {str(e)}")
+        logger.info("Using fallback stock list")
+        return ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK']
 
 def calculate_sma(data, length):
     """Calculate Simple Moving Average."""
@@ -106,22 +162,79 @@ def check_ma_crossover(stock_symbol, timeframe='1d'):
         return None, None, None
 
 def generate_chart(stock_symbol, data, sma_50, timeframe='1d'):
-    # ... (same as before)
+    """Generate chart with stock price and SMA."""
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(data.index, data['Close'], label='Close Price')
+        plt.plot(sma_50.index, sma_50, label='50 SMA', color='red')
+
+        timeframe_label = "Daily" if timeframe == '1d' else "Weekly" if timeframe == '1wk' else "Monthly"
+        plt.title(f'{stock_symbol} {timeframe_label} Chart with 50 SMA')
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+        plt.legend()
+        plt.grid(True)
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        filename = f'charts/{stock_symbol.replace(".", "_")}_SMA_{timeframe}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
+        plt.savefig(filename)
+        plt.close()
+
+        return filename
+
+    except Exception as e:
+        logger.error(f"Error generating chart for {stock_symbol} on {timeframe}: {str(e)}")
+        return None
 
 def check_crossovers():
-    # ... (same as before)
-        for stock in stock_list:
-            logger.info(f"processing stock: {stock}")
-            if alerts_sent >= 30:
-                break
-            for timeframe in timeframes:
-                buy_signal, sell_signal, data = check_ma_crossover(stock, timeframe)
-                if buy_signal is None:
-                    continue
-                if buy_signal or sell_signal:
-                    # ... (same as before)
+    """Check for MA crossovers."""
+    IST = pytz.timezone('Asia/Kolkata')
+    timeframes = ['1d', '1wk', '1mo']
+    BUY_EMOJI = "🍏"
+    SELL_EMOJI = "🔴"
+    stock_list = load_nse500_stocks()
+    alerts_sent = 0
+
+    send_telegram_message(f"🔍 *MA Crossover Scan Started*\nProcessing {len(stock_list)} stocks across 3 timeframes...")
+
+    for stock in stock_list:
+        logger.info(f"processing stock: {stock}")
+        if alerts_sent >= 30:
+            break
+        for timeframe in timeframes:
+            buy_signal, sell_signal, data = check_ma_crossover(stock, timeframe)
+            if buy_signal is None:
+                continue
+            if buy_signal or sell_signal:
+                sma_50 = calculate_sma(data, 50)
+                chart_path = generate_chart(stock, data, sma_50, timeframe)
+
+                if chart_path:
+                    timeframe_label = "Daily" if timeframe == '1d' else "Weekly" if timeframe == '1wk' else "Monthly"
+                    if buy_signal:
+                        message = f"{BUY_EMOJI} *{timeframe_label} BUY*: {stock}\n\n"
+                        message += f"📅 Date: {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        message += "📈 50 SMA Crossover (Above)"
+                    else:
+                        message = f"{SELL_EMOJI} *{timeframe_label} SELL*: {stock}\n\n"
+                        message += f"📅 Date: {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        message += "📉 50 SMA Crossover (Below)"
+
+                    success = send_telegram_message(message, chart_path)
+                    if success:
+                        logger.info(f"Alert sent for {stock}: {timeframe_label} Crossover")
+                        alerts_sent += 1
+                    os.remove(chart_path)
             time.sleep(15) # Add a 15-second delay between stocks
-    # ... (same as before)
+    send_telegram_message(f"🔍 *MA Crossover Scan Complete*\nTotal alerts: {alerts_sent}")
+    return alerts_sent
 
 if __name__ == "__main__":
-    # ... (same as before)
+    logger.info("Starting MA crossover scan")
+    if test_telegram_connection():
+        alerts = check_crossovers()
+        logger.info(f"Scan complete. {alerts} alerts sent.")
+    else:
+        logger.error("Telegram connection failed.")
