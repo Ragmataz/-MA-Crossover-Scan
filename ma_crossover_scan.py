@@ -112,7 +112,9 @@ def check_ma_crossover(stock_symbol, timeframe='1d'):
             logger.warning(f"No data retrieved for {stock_symbol} on {timeframe}")
             return None, None, None
 
+        logger.info(f"Data retrieved for {stock_symbol} on {timeframe}:\n{data.head()}")
         sma_50 = calculate_sma(data, 50)
+        logger.info(f"SMA 50 for {stock_symbol} on {timeframe}:\n{sma_50.head()}")
 
         if len(data) < 51:
             logger.warning(f"Not enough data for MA calculation: {stock_symbol} on {timeframe}")
@@ -126,6 +128,7 @@ def check_ma_crossover(stock_symbol, timeframe='1d'):
         buy_signal = previous_close < previous_sma and current_close > current_sma
         sell_signal = previous_close > previous_sma and current_close < current_sma
 
+        logger.info(f"{stock_symbol} {timeframe}: close_prev={previous_close}, close_curr={current_close}, sma_prev={previous_sma}, sma_curr={current_sma}")
         return buy_signal, sell_signal, data
 
     except Exception as e:
@@ -171,6 +174,7 @@ def check_crossovers():
     send_telegram_message(f"🔍 *MA Crossover Scan Started*\nProcessing {len(stock_list)} stocks across 3 timeframes...")
 
     for stock in stock_list:
+        logger.info(f"processing stock: {stock}")
         if alerts_sent >= 30:
             break
         for timeframe in timeframes:
