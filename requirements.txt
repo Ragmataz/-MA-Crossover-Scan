@@ -3,4 +3,4 @@ matplotlib
 python-telegram-bot
 pytz
 requests
-nsepy
+alpha_vantage
